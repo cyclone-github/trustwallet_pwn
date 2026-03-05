@@ -68,7 +68,7 @@ Example test wallet with password: `Cyclone!`
 ./trustwallet_decryptor.bin -h trustwallet.txt -w wordlist.txt
 
  -------------------------------------------------- 
-|      Cyclone's TrustWallet Vault Decryptor       |
+|       Cyclone's TrustWallet Vault Decryptor       |
 | https://github.com/cyclone-github/trustwallet_pwn |
  -------------------------------------------------- 
 

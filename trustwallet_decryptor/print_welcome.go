@@ -38,7 +38,7 @@ cat wordlist | ./trustwallet_decryptor.bin -h trustwallet.txt
 // print welcome screen
 func printWelcomeScreen(vaultFileFlag, wordlistFileFlag *string, validVaultCount, numThreads int) {
 	fmt.Fprintln(os.Stderr, " -------------------------------------------------- ")
-	fmt.Fprintln(os.Stderr, "|      Cyclone's TrustWallet Vault Decryptor       |")
+	fmt.Fprintln(os.Stderr, "|       Cyclone's TrustWallet Vault Decryptor       |")
 	fmt.Fprintln(os.Stderr, "| https://github.com/cyclone-github/trustwallet_pwn |")
 	fmt.Fprintln(os.Stderr, " -------------------------------------------------- ")
 	fmt.Fprintln(os.Stderr)
