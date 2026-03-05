@@ -1,4 +1,4 @@
-module trustwallet_extractor
+module github.com/cyclone-github/trustwallet_pwn/trustwallet_extractor
 
 go 1.25.0
 

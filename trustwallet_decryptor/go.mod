@@ -1,4 +1,4 @@
-module trustwallet_decryptor
+module github.com/cyclone-github/trustwallet_pwn/trustwallet_decryptor
 
 go 1.25.0
 
