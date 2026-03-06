@@ -21,7 +21,7 @@ https://github.com/cyclone-github/trustwallet_pwn/blob/main/LICENSE
 version history
 v0.1.0; 2025-03-04
 	initial release
-v0.2.0; 2026-03-05
+v0.2.0; 2026-03-06
 	github release
 */
 

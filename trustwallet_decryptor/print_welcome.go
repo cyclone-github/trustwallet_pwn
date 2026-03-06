@@ -8,7 +8,8 @@ import (
 
 // version func
 func versionFunc() {
-	fmt.Fprintln(os.Stderr, "Cyclone's TrustWallet Vault Decryptor v0.2.0; 2026-03-05\nhttps://github.com/cyclone-github/trustwallet_pwn\n")
+	fmt.Fprintln(os.Stderr, "Cyclone's TrustWallet Vault Decryptor v0.2.0; 2026-03-06\nhttps://github.com/cyclone-github/trustwallet_pwn")
+	fmt.Fprintln(os.Stderr)
 }
 
 // help func
@@ -37,10 +38,10 @@ cat wordlist | ./trustwallet_decryptor.bin -h trustwallet.txt
 
 // print welcome screen
 func printWelcomeScreen(vaultFileFlag, wordlistFileFlag *string, validVaultCount, numThreads int) {
-	fmt.Fprintln(os.Stderr, " -------------------------------------------------- ")
+	fmt.Fprintln(os.Stderr, " --------------------------------------------------- ")
 	fmt.Fprintln(os.Stderr, "|       Cyclone's TrustWallet Vault Decryptor       |")
 	fmt.Fprintln(os.Stderr, "| https://github.com/cyclone-github/trustwallet_pwn |")
-	fmt.Fprintln(os.Stderr, " -------------------------------------------------- ")
+	fmt.Fprintln(os.Stderr, " --------------------------------------------------- ")
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintf(os.Stderr, "Vault file:\t%s\n", *vaultFileFlag)
 	fmt.Fprintf(os.Stderr, "Valid Vaults:\t%d\n", validVaultCount)
