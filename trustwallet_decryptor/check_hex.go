@@ -15,24 +15,18 @@ if you have suggestions on how to better handle HEX decoding errors, contact me 
 func checkForHexBytes(line []byte) ([]byte, []byte, int) {
 	hexPrefix := []byte("$HEX[")
 	suffix := byte(']')
-
-	// Step 1: Check for prefix and adjust for missing ']'
 	if bytes.HasPrefix(line, hexPrefix) {
 		var hexErrorDetected int
 		if line[len(line)-1] != suffix {
 			line = append(line, suffix)
 			hexErrorDetected = 1
 		}
-
-		// Step 2: Find the indices for the content inside the brackets
 		startIdx := bytes.IndexByte(line, '[')
 		endIdx := bytes.LastIndexByte(line, ']')
 		if startIdx == -1 || endIdx == -1 || endIdx <= startIdx {
 			return line, line, 1
 		}
 		hexContent := line[startIdx+1 : endIdx]
-
-		// Step 3 & 4: Decode the hex content and handle errors by cleaning if necessary
 		decodedBytes := make([]byte, hex.DecodedLen(len(hexContent)))
 		n, err := hex.Decode(decodedBytes, hexContent)
 		if err != nil {
@@ -45,9 +39,8 @@ func checkForHexBytes(line []byte) ([]byte, []byte, int) {
 			if len(cleaned)%2 != 0 {
 				cleaned = append([]byte{'0'}, cleaned...)
 			}
-
 			decodedBytes = make([]byte, hex.DecodedLen(len(cleaned)))
-			_, err = hex.Decode(decodedBytes, cleaned)
+			n, err = hex.Decode(decodedBytes, cleaned)
 			if err != nil {
 				return line, line, 1
 			}
@@ -56,6 +49,5 @@ func checkForHexBytes(line []byte) ([]byte, []byte, int) {
 		decodedBytes = decodedBytes[:n]
 		return decodedBytes, hexContent, hexErrorDetected
 	}
-	// Step 5: Return original if not a hex string
 	return line, line, 0
 }

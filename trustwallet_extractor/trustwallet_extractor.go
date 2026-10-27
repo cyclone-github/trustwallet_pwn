@@ -8,9 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"unicode"
 
@@ -29,38 +27,24 @@ GNU General Public License v2.0
 https://github.com/cyclone-github/trustwallet_pwn/blob/main/LICENSE
 
 version history
-v0.1.0; 2025-03-04;
+v0.1.0; 2025-03-04
 	initial release
-v0.2.0; 2026-03-06;
+v0.2.0; 2026-03-06
 	github release
+v0.3.1; 2026-10-27
+	json keystore support
+	version alignment and comment cleanup
 */
-
-// clear screen function
-func clearScreen() {
-	switch runtime.GOOS {
-	case "linux", "darwin":
-		cmd := exec.Command("clear")
-		cmd.Stdout = os.Stdout
-		cmd.Run()
-	case "windows":
-		cmd := exec.Command("cmd", "/c", "cls")
-		cmd.Stdout = os.Stdout
-		cmd.Run()
-	}
-}
-
-// version func
 func versionFunc() {
-	fmt.Fprintln(os.Stderr, "Cyclone's TrustWallet Vault Extractor v0.2.0; 2026-03-06\nhttps://github.com/cyclone-github/trustwallet_pwn")
+	fmt.Fprintln(os.Stderr, "Cyclone's TrustWallet Vault Extractor v0.3.1; 2026-10-27\nhttps://github.com/cyclone-github/trustwallet_pwn")
 	fmt.Fprintln(os.Stderr)
 }
-
-// help func
 func helpFunc() {
 	versionFunc()
 	str := `Example Usage:
 ./trustwallet_extractor.bin [-version] [-help] [trustwallet_vault_dir]
 ./trustwallet_extractor.bin egjidjbpglichdcondbcbdnbeeppgdph/
+./trustwallet_extractor.bin wallet.json
 
 Default TrustWallet vault locations for Chrome extensions:
 
@@ -74,16 +58,13 @@ Windows:
 C:\Users\$USER\AppData\Local\Google\Chrome\User Data\Default\Local Extension Settings\egjidjbpglichdcondbcbdnbeeppgdph\`
 	fmt.Fprintln(os.Stderr, str)
 }
-
-// print welcome screen
 func printWelcomeScreen() {
-	fmt.Println(" ------------------------------------------------------- ")
-	fmt.Println("|       Cyclone's TrustWallet Vault Hash Extractor      |")
-	fmt.Println("|       Use TrustWallet Vault Decryptor to decrypt      |")
-	fmt.Println("|   https://github.com/cyclone-github/trustwallet_pwn   |")
-	fmt.Println(" ------------------------------------------------------- ")
+	fmt.Fprintln(os.Stderr, " ------------------------------------------------------- ")
+	fmt.Fprintln(os.Stderr, "|       Cyclone's TrustWallet Vault Hash Extractor      |")
+	fmt.Fprintln(os.Stderr, "|       Use TrustWallet Vault Decryptor to decrypt      |")
+	fmt.Fprintln(os.Stderr, "|   https://github.com/cyclone-github/trustwallet_pwn   |")
+	fmt.Fprintln(os.Stderr, " ------------------------------------------------------- ")
 }
-
 func extractBalancedJSON(raw string, start int) (string, int, bool) {
 	depth := 0
 	inString := false
@@ -116,7 +97,6 @@ func extractBalancedJSON(raw string, start int) (string, int, bool) {
 	}
 	return "", 0, false
 }
-
 func extractCryptoFromJSON(jsonStr string) (json.RawMessage, bool) {
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(jsonStr), &obj); err != nil {
@@ -126,7 +106,6 @@ func extractCryptoFromJSON(jsonStr string) (json.RawMessage, bool) {
 	if !hasCrypto {
 		return nil, false
 	}
-
 	var crypto map[string]json.RawMessage
 	if err := json.Unmarshal(cryptoRaw, &crypto); err != nil {
 		return nil, false
@@ -136,28 +115,22 @@ func extractCryptoFromJSON(jsonStr string) (json.RawMessage, bool) {
 			return nil, false
 		}
 	}
-
 	return cryptoRaw, true
 }
-
 func buildVaultHash(cryptoRaw, trustPBKDF2, trustVault json.RawMessage) (string, bool) {
-	out := map[string]json.RawMessage{
-		"crypto": cryptoRaw,
-	}
+	out := map[string]json.RawMessage{"crypto": cryptoRaw}
 	if len(trustPBKDF2) > 0 {
 		out["trust:pbkdf2"] = trustPBKDF2
 	}
 	if len(trustVault) > 0 {
 		out["trust:vault"] = trustVault
 	}
-
 	b, err := json.Marshal(out)
 	if err != nil {
 		return "", false
 	}
 	return string(b), true
 }
-
 func unquoteJSON(raw []byte) json.RawMessage {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) > 1 && trimmed[0] == '"' {
@@ -168,13 +141,11 @@ func unquoteJSON(raw []byte) json.RawMessage {
 	}
 	return json.RawMessage(trimmed)
 }
-
 func printVaultHash(data []byte, trustPBKDF2, trustVault json.RawMessage, seen map[string]bool) {
 	raw := string(data)
 	if !strings.Contains(raw, `"crypto"`) || !strings.Contains(raw, `"ciphertext"`) {
 		return
 	}
-
 	offset := 0
 	for offset < len(raw) {
 		idx := strings.IndexByte(raw[offset:], '{')
@@ -182,13 +153,11 @@ func printVaultHash(data []byte, trustPBKDF2, trustVault json.RawMessage, seen m
 			break
 		}
 		pos := offset + idx
-
 		jsonStr, end, ok := extractBalancedJSON(raw, pos)
 		if !ok {
 			offset = pos + 1
 			continue
 		}
-
 		cryptoRaw, ok := extractCryptoFromJSON(jsonStr)
 		if ok {
 			var obj map[string]json.RawMessage
@@ -201,29 +170,23 @@ func printVaultHash(data []byte, trustPBKDF2, trustVault json.RawMessage, seen m
 			if existing, ok := obj["trust:vault"]; ok {
 				vault = existing
 			}
-
-			if hash, ok := buildVaultHash(cryptoRaw, pbkdf2, vault); ok {
-				if !seen[hash] {
-					seen[hash] = true
-					fmt.Println(hash)
-				}
+			if hash, ok := buildVaultHash(cryptoRaw, pbkdf2, vault); ok && !seen[hash] {
+				seen[hash] = true
+				fmt.Println(hash)
 			}
 		}
-
 		offset = end + 1
 	}
 }
 
+// goleveldb by syndtr uses golang snappy for chrome and brave vaults
 func processLevelDB(db *leveldb.DB) {
-	var trustPBKDF2 json.RawMessage
-	var trustVault json.RawMessage
+	var trustPBKDF2, trustVault json.RawMessage
 	var vaultValues [][]byte
-
 	iter := db.NewIterator(nil, nil)
 	for iter.Next() {
 		key := string(iter.Key())
 		val := iter.Value()
-
 		switch key {
 		case "trust:pbkdf2":
 			trustPBKDF2 = unquoteJSON(val)
@@ -238,13 +201,11 @@ func processLevelDB(db *leveldb.DB) {
 		}
 	}
 	iter.Release()
-
 	seen := make(map[string]bool)
 	for _, val := range vaultValues {
 		printVaultHash(val, trustPBKDF2, trustVault, seen)
 	}
 }
-
 func filterPrintableBytes(data []byte) []byte {
 	printable := make([]rune, 0, len(data))
 	for _, b := range data {
@@ -256,11 +217,9 @@ func filterPrintableBytes(data []byte) []byte {
 	}
 	return []byte(string(printable))
 }
-
 func dumpRawLDBFiles(dirPath string) error {
 	var trustPBKDF2, trustVault json.RawMessage
 	var vaultValues [][]byte
-
 	err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			log.Printf("Failed to access path %s: %v", path, err)
@@ -275,14 +234,12 @@ func dumpRawLDBFiles(dirPath string) error {
 	if err != nil {
 		return err
 	}
-
 	seen := make(map[string]bool)
 	for _, val := range vaultValues {
 		printVaultHash(filterPrintableBytes(val), trustPBKDF2, trustVault, seen)
 	}
 	return nil
 }
-
 func collectRawLDBFile(filePath string, trustPBKDF2, trustVault *json.RawMessage, vaultValues *[][]byte) {
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -290,28 +247,23 @@ func collectRawLDBFile(filePath string, trustPBKDF2, trustVault *json.RawMessage
 		return
 	}
 	defer file.Close()
-
 	fileInfo, err := file.Stat()
 	if err != nil {
 		log.Printf("Failed to get file info %s: %v", filePath, err)
 		return
 	}
-
 	reader, err := table.NewReader(file, fileInfo.Size(), storage.FileDesc{Type: storage.TypeTable, Num: 0}, nil, nil, &opt.Options{})
 	if err != nil {
 		log.Printf("Failed to create table reader %s: %v", filePath, err)
 		return
 	}
 	defer reader.Release()
-
 	iter := reader.NewIterator(nil, nil)
 	defer iter.Release()
-
 	for iter.Next() {
 		key := string(iter.Key())
 		value := iter.Value()
 		filtered := filterPrintableBytes(value)
-
 		switch {
 		case strings.Contains(key, "trust:pbkdf2") || strings.Contains(string(filtered), `"salt":"0x`):
 			if len(*trustPBKDF2) == 0 {
@@ -331,10 +283,8 @@ func collectRawLDBFile(filePath string, trustPBKDF2, trustVault *json.RawMessage
 			if len(*trustVault) == 0 {
 				raw := string(filtered)
 				if idx := strings.Index(raw, `{"data":"`); idx >= 0 {
-					if j, _, ok := extractBalancedJSON(raw, idx); ok {
-						if strings.Contains(j, `"iv"`) && strings.Contains(j, `"salt"`) {
-							*trustVault = json.RawMessage(j)
-						}
+					if j, _, ok := extractBalancedJSON(raw, idx); ok && strings.Contains(j, `"iv"`) && strings.Contains(j, `"salt"`) {
+						*trustVault = json.RawMessage(j)
 					}
 				} else {
 					v := unquoteJSON(filtered)
@@ -352,17 +302,11 @@ func collectRawLDBFile(filePath string, trustPBKDF2, trustVault *json.RawMessage
 		}
 	}
 }
-
-// main
 func main() {
 	cycloneFlag := flag.Bool("cyclone", false, "")
 	versionFlag := flag.Bool("version", false, "Program version")
 	helpFlag := flag.Bool("help", false, "Program usage instructions")
 	flag.Parse()
-
-	clearScreen()
-
-	// run sanity checks for special flags
 	if *versionFlag {
 		versionFunc()
 		os.Exit(0)
@@ -377,20 +321,24 @@ func main() {
 		helpFunc()
 		os.Exit(0)
 	}
-
 	ldbDir := flag.Arg(0)
 	if ldbDir == "" {
 		fmt.Fprintln(os.Stderr, "Error: TrustWallet vault directory is required")
 		helpFunc()
 		os.Exit(1)
 	}
-
 	printWelcomeScreen()
-
+	if info, err := os.Stat(ldbDir); err == nil && info.Mode().IsRegular() && strings.EqualFold(filepath.Ext(ldbDir), ".json") {
+		if err := processJSONFile(ldbDir); err != nil {
+			fmt.Fprintln(os.Stderr, "Error extracting JSON wallet:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	db, err := leveldb.OpenFile(ldbDir, nil)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error opening Vault:", err)
-		fmt.Println("Attempting to dump raw .ldb files...")
+		fmt.Fprintln(os.Stderr, "Attempting to dump raw .ldb files...")
 		err = dumpRawLDBFiles(ldbDir)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to dump raw .ldb files: %v\n", err)
@@ -399,8 +347,5 @@ func main() {
 		os.Exit(0)
 	}
 	defer db.Close()
-
 	processLevelDB(db)
 }
-
-// end code

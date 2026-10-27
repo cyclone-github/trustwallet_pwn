@@ -2,52 +2,30 @@ package main
 
 import (
 	"fmt"
-	"log"
-	"os"
-	"sync"
-	"sync/atomic"
+	"math"
 	"time"
 )
 
-// monitor status
-func monitorPrintStats(crackedCount *int32, linesProcessed *int32, stopChan <-chan struct{}, startTime time.Time, validVaultCount int, wg *sync.WaitGroup, interval int) {
-
-	var ticker *time.Ticker
-	if interval > 0 {
-		ticker = time.NewTicker(time.Duration(interval) * time.Second)
-		defer ticker.Stop()
+func formatStatus(elapsed time.Duration, matches, total int, processed, wordlistSize uint64) string {
+	if elapsed < time.Microsecond {
+		elapsed = time.Microsecond
 	}
-
-	for {
-		select {
-		case <-stopChan:
-			// print final stats and exit
-			printStats(time.Since(startTime), int(atomic.LoadInt32(crackedCount)), validVaultCount, int(atomic.LoadInt32(linesProcessed)), true)
-			wg.Done()
-			return
-		case <-func() <-chan time.Time {
-			if ticker != nil {
-				return ticker.C
-			}
-			return nil
-		}():
-			if interval > 0 {
-				printStats(time.Since(startTime), int(atomic.LoadInt32(crackedCount)), validVaultCount, int(atomic.LoadInt32(linesProcessed)), false)
-			}
-		}
+	seconds := int64(elapsed / time.Second)
+	rate := float64(processed) / elapsed.Seconds()
+	status := fmt.Sprintf("Decrypted: %d/%d %.2f h/s %02dh:%02dm:%02ds", matches, total, rate, seconds/3600, (seconds/60)%60, seconds%60)
+	if wordlistSize == 0 {
+		return status + " ETA: --"
 	}
-}
-
-// printStats
-func printStats(elapsedTime time.Duration, crackedCount int, validVaultCount, linesProcessed int, exitProgram bool) {
-	hours := int(elapsedTime.Hours())
-	minutes := int(elapsedTime.Minutes()) % 60
-	seconds := int(elapsedTime.Seconds()) % 60
-	linesPerSecond := float64(linesProcessed) / elapsedTime.Seconds()
-	log.Printf("Decrypted: %d/%d %.2f h/s %02dh:%02dm:%02ds", crackedCount, validVaultCount, linesPerSecond, hours, minutes, seconds)
-	if exitProgram {
-		fmt.Println("")
-		time.Sleep(100 * time.Millisecond)
-		os.Exit(0)
+	if processed >= wordlistSize || matches == total {
+		return status + " ETA: 00h:00m:00s"
 	}
+	if rate <= 0 {
+		return status + " ETA: --"
+	}
+	remaining := math.Ceil(float64(wordlistSize-processed) / rate)
+	if remaining > float64(math.MaxInt64) {
+		return status + " ETA: --"
+	}
+	eta := int64(remaining)
+	return fmt.Sprintf("%s ETA: %02dh:%02dm:%02ds", status, eta/3600, (eta/60)%60, eta%60)
 }
