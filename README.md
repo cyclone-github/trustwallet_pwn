@@ -132,6 +132,21 @@ The elapsed time and ETA are reported for wordlist files (or the selected chunk)
 
 ---
 
+### Tested hash rates
+
+> CPU
+- `AMD Ryzen 7 3700X: 60 h/s` (cyclone)
+- `Intel Core i5-12600k: 85 h/s` (64_nickel)
+- `2x Intel Xeon E5-2690 v4: 156 h/s` (cyclone)
+- `AMD ThreadRipper 3960X 186 h/s` (64_nickel)
+> GPU
+- `1x RTX 4090: 329 h/s` (cyclone)
+- `2x RTX 4090: 658 h/s` (cyclone)
+> CPU+GPU (hybrid - default mode)
+- `2x Intel Xeon + 2x 4090: 812 h/s` (cyclone)
+
+---
+
 # Compile from source
 
 This assumes Go and Git are installed. Linux GPU builds additionally need a C compiler and the OpenCL ICD loader.
