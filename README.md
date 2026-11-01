@@ -149,40 +149,42 @@ The elapsed time and ETA are reported for wordlist files (or the selected chunk)
 
 # Compile from source
 
-This assumes Go and Git are installed. Linux GPU builds additionally need a C compiler and the OpenCL ICD loader.
+This assumes Go and Git are installed. Linux GPU builds additionally need a C compiler and the OpenCL ICD loader (`libOpenCL.so.1`).
 
 ```bash
 git clone https://github.com/cyclone-github/trustwallet_pwn.git
+cd trustwallet_pwn
 ```
 
 ### trustwallet_extractor
 
 ```bash
-cd trustwallet_pwn/trustwallet_extractor
-go mod tidy
-go build -ldflags="-s -w" .
+cd trustwallet_extractor
+go build -trimpath -ldflags="-s -w" -o trustwallet_extractor.bin .
+# to install
 go install -ldflags="-s -w" .
 ```
 
 ### trustwallet_decryptor
 
 ```bash
-cd trustwallet_pwn/trustwallet_decryptor
-go mod tidy
-go build -ldflags="-s -w" .
-go install -ldflags="-s -w" .
+cd ../trustwallet_decryptor
+CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o trustwallet_decryptor.bin .
+# to install
+CGO_ENABLED=1 go install -ldflags="-s -w" .
 ```
 
-CPU-only builds on Windows or macOS:
+CPU-only decryptor build (Linux/macOS shell, from `trustwallet_decryptor`):
 
 ```bash
-CGO_ENABLED=0 go build -o trustwallet_decryptor .
+CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o trustwallet_decryptor.bin .
 ```
 
-On Linux with GPU support:
+CPU-only decryptor build (Windows PowerShell, from `trustwallet_decryptor`):
 
-```bash
-CGO_ENABLED=1 go build -o trustwallet_decryptor.bin .
+```powershell
+$env:CGO_ENABLED = "0"
+go build -trimpath -ldflags="-s -w" -o trustwallet_decryptor.exe .
 ```
 
 ---

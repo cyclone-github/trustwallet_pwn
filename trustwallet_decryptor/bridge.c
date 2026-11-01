@@ -200,7 +200,7 @@ twgpu *twgpu_open(const char *source,int device_index,int max_lanes,int N,char *
   size_t bytes=(size_t)lanes*lane_bytes;
   g->scratch[i]=clCreateBuffer(g->ctx,CL_MEM_READ_WRITE,bytes,NULL,&rc);
   if(!g->scratch[i]||rc!=CL_SUCCESS){
-    if(err&&errlen)snprintf(err,errlen,"scratch allocation #%d of %d (%zu MiB): OpenCL error %d",i+1,g->segments,bytes/TW_MIB,(int)rc);
+    if(err&&errlen)snprintf(err,errlen,"scratch allocation #%d of %d (%zu MiB): OpenCL error %d",i+1,g->segments,(size_t)(bytes/TW_MIB),(int)rc);
     goto error;
   }
  }

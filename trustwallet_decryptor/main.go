@@ -38,9 +38,11 @@ v0.3.1; 2026-10-27
 	add chunking support (-chunk nth/nth)
 	add ETA for -w
     add JSON-compatible recovery
+v0.3.2; 2026-11-01
+    fix OpenCL format warning
 */
 
-const version = "v0.3.1"
+const version = "v0.3.2"
 
 func main() {
 	wordPath := flag.String("w", "", "Wordlist file (default stdin)")
