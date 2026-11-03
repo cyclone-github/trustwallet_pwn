@@ -1,9 +1,10 @@
-//go:build linux && cgo
+//go:build cgo && (linux || (windows && amd64))
 
 package main
 
 /*
-#cgo LDFLAGS: -l:libOpenCL.so.1
+#cgo linux LDFLAGS: -l:libOpenCL.so.1
+#cgo windows LDFLAGS: -lOpenCL
 #include <stdlib.h>
 #include "bridge.h"
 */

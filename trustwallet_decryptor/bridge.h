@@ -1,4 +1,4 @@
-//go:build linux && cgo
+//go:build cgo && (linux || (windows && amd64))
 
 #ifndef TW_BRIDGE_H
 #define TW_BRIDGE_H

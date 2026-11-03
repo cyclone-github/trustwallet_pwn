@@ -1,4 +1,4 @@
-//go:build linux && cgo
+//go:build cgo && (linux || (windows && amd64))
 
 #include "bridge.h"
 #include <stdlib.h>

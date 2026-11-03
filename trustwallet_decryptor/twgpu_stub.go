@@ -1,11 +1,11 @@
-//go:build !linux || !cgo
+//go:build !cgo || (!linux && !(windows && amd64))
 
 package main
 
 import "errors"
 
 // cpu-only build support
-var errNoOpenCL = errors.New("OpenCL GPU support is available on Linux with cgo")
+var errNoOpenCL = errors.New("OpenCL GPU support requires Linux with cgo or Windows amd64 with cgo")
 
 type gpuDevice struct {
 	id           int

@@ -40,9 +40,11 @@ v0.3.1; 2026-10-27
     add JSON-compatible recovery
 v0.3.2; 2026-11-01
     fix OpenCL format warning
+v0.3.3; 2026-11-02
+    enable Windows amd64 OpenCL GPU support
 */
 
-const version = "v0.3.2"
+const version = "v0.3.3; 2026-11-02"
 
 func main() {
 	wordPath := flag.String("w", "", "Wordlist file (default stdin)")
