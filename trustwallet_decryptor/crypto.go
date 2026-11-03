@@ -15,6 +15,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"golang.org/x/crypto/pbkdf2"
@@ -238,26 +239,83 @@ func fallbackPlaintext(v vault, plain []byte) []byte {
 
 // gpu scrypt supports r=8 and p>=1
 func gpuDeriveBatch(v vault, passwords [][]byte, g *gpuBackend, steps int) ([][]byte, error) {
+	return gpuDeriveBatchTuned(v, passwords, g, steps, 1)
+}
+
+// gpuDeriveBatchTuned derives the host-side parts of scrypt in parallel.
+// The expensive optional Trust Wallet SHA512 transformation is CPU-bound;
+// splitting independent candidates does not change their output or ordering.
+// The OpenCL context is used only by the caller goroutine.
+func gpuDeriveBatchTuned(v vault, passwords [][]byte, g *gpuBackend, steps, prepareThreads int) ([][]byte, error) {
 	if v.r != 8 {
 		return nil, fmt.Errorf("GPU ROMix currently supports only r=8 (got %d)", v.r)
 	}
 	if g.n != v.n || g.p != v.p {
 		return nil, errors.New("GPU scrypt parameters mismatch")
 	}
+	if len(passwords) == 0 {
+		return nil, nil
+	}
 	blocklen := 128 * v.r
 	B := make([]byte, len(passwords)*v.p*blocklen)
 	transformed := make([][]byte, len(passwords))
-	for i, pw := range passwords {
-		pass, err := transformedPassword(v, pw)
-		if err != nil {
-			return nil, err
+	if prepareThreads < 1 {
+		prepareThreads = 1
+	}
+	if prepareThreads > len(passwords) {
+		prepareThreads = len(passwords)
+	}
+	// For standard scrypt, the initial one-round PBKDF2 is cheap. Avoid
+	// goroutine overhead there; use parallel workers for trust:pbkdf2 wallets.
+	if v.presalt == nil {
+		prepareThreads = 1
+	}
+	var prepErrs []error
+	if prepareThreads == 1 {
+		for i, pw := range passwords {
+			pass, err := transformedPassword(v, pw)
+			if err != nil {
+				return nil, err
+			}
+			transformed[i] = pass
+			blocks, err := pbkdf2Derive(pass, v.salt, 1, v.p*blocklen, false)
+			if err != nil {
+				return nil, err
+			}
+			copy(B[i*v.p*blocklen:(i+1)*v.p*blocklen], blocks)
 		}
-		transformed[i] = pass
-		blocks, err := pbkdf2Derive(pass, v.salt, 1, v.p*blocklen, false)
-		if err != nil {
-			return nil, err
+	} else {
+		prepErrs = make([]error, len(passwords))
+		jobs := make(chan int)
+		var wg sync.WaitGroup
+		for worker := 0; worker < prepareThreads; worker++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for i := range jobs {
+					pass, err := transformedPassword(v, passwords[i])
+					if err == nil {
+						transformed[i] = pass
+						var blocks []byte
+						blocks, err = pbkdf2Derive(pass, v.salt, 1, v.p*blocklen, false)
+						if err == nil {
+							copy(B[i*v.p*blocklen:(i+1)*v.p*blocklen], blocks)
+						}
+					}
+					prepErrs[i] = err
+				}
+			}()
 		}
-		copy(B[i*v.p*blocklen:], blocks)
+		for i := range passwords {
+			jobs <- i
+		}
+		close(jobs)
+		wg.Wait()
+		for i, err := range prepErrs {
+			if err != nil {
+				return nil, fmt.Errorf("prepare candidate %d: %w", i, err)
+			}
+		}
 	}
 	if err := g.romix(B, len(passwords)*v.p, steps); err != nil {
 		return nil, err

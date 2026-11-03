@@ -10,6 +10,7 @@ var errNoOpenCL = errors.New("OpenCL GPU support requires Linux with cgo or Wind
 type gpuDevice struct {
 	id           int
 	name         string
+	driver       string
 	mem          uint64
 	free         uint64
 	maxAlloc     uint64
@@ -20,7 +21,10 @@ func gpuDevices() ([]gpuDevice, error) { return nil, errNoOpenCL }
 
 type gpuBackend struct{ n, p int }
 
-func openGPU(deviceID, n, p, batch int) (*gpuBackend, error)   { return nil, errNoOpenCL }
+func openGPU(deviceID, n, p, batch int) (*gpuBackend, error) { return nil, errNoOpenCL }
+func openGPUWorkgroup(deviceID, n, p, batch, workgroup int) (*gpuBackend, error) {
+	return nil, errNoOpenCL
+}
 func (g *gpuBackend) close()                                   {}
 func (g *gpuBackend) romix(data []byte, lanes, step int) error { return errNoOpenCL }
 func (g *gpuBackend) name() string                             { return "" }

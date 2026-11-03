@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -75,6 +76,10 @@ func consumeCPU(ctx context.Context, ch <-chan []byte, vaults []vault, threads i
 }
 
 func runGPUs(ctx context.Context, stop context.CancelFunc, scan candidateSource, vaults []vault, devicesSpec string, memPercent, manualBatch, manualStep, cpuThreads int, allowRuntimeFallback bool, processed *atomic.Uint64, emit emitFn, alreadyCracked func(int) bool) error {
+	return runGPUsTuned(ctx, stop, scan, vaults, devicesSpec, memPercent, manualBatch, manualStep, 0, 1, cpuThreads, allowRuntimeFallback, processed, emit, alreadyCracked, nil)
+}
+
+func runGPUsTuned(ctx context.Context, stop context.CancelFunc, scan candidateSource, vaults []vault, devicesSpec string, memPercent, manualBatch, manualStep, workgroup, prepareThreads, cpuThreads int, allowRuntimeFallback bool, processed *atomic.Uint64, emit emitFn, alreadyCracked func(int) bool, onReady func()) error {
 	for _, v := range vaults {
 		if v.r != 8 || v.kdf != "scrypt" {
 			return fmt.Errorf("%w: GPU requires scrypt r=8 (wallet r=%d)", errGPUInitialization, v.r)
@@ -109,19 +114,45 @@ func runGPUs(ctx context.Context, stop context.CancelFunc, scan candidateSource,
 		}
 	}()
 	n, p := vaults[0].n, vaults[0].p
+	if prepareThreads == 0 {
+		prepareThreads = runtime.GOMAXPROCS(0) / len(selected)
+		if cpuThreads > 0 {
+			prepareThreads = (runtime.GOMAXPROCS(0) - cpuThreads) / len(selected)
+		}
+		if prepareThreads < 1 {
+			prepareThreads = 1
+		}
+		if prepareThreads > 16 {
+			prepareThreads = 16
+		}
+	}
 	for _, d := range selected {
+		chosenWG := workgroup
 		batch := manualBatch
-		if batch == 0 {
-			batch = batchForDevice(d, n, 8, p, memPercent)
+		tuningSource := "manual"
+		if batch == 0 || chosenWG == -1 {
+			choice, origin, tuneErr := selectGPUTuning(d, n, p, memPercent, manualBatch, workgroup, manualStep, vaults[0].presalt != nil)
+			if tuneErr != nil {
+				return fmt.Errorf("%w: GPU %d auto-tune: %v", errGPUInitialization, d.id, tuneErr)
+			}
+			batch, chosenWG, tuningSource = choice.Batch, choice.Workgroup, origin
+			fmt.Fprintf(os.Stderr, "GPU %d auto-tune (%s): N=%d p=%d batch=%d workgroup=%d (ROMix %.1f candidates/s; CPU prep threads=%d)\n", d.id, origin, n, p, batch, chosenWG, choice.Rate, prepareThreads)
+		}
+		if chosenWG > 0 {
+			align := chosenWG / gcdInt(chosenWG, p)
+			if manualBatch > 0 && batch%align != 0 {
+				return fmt.Errorf("%w: -gpu-batch %d must be a multiple of %d when p=%d and -gpu-workgroup=%d", errGPUInitialization, batch, align, p, chosenWG)
+			}
+			batch -= batch % align
 		}
 		if batch < 1 {
-			return fmt.Errorf("%w: GPU %d has insufficient usable memory for one password", errGPUInitialization, d.id)
+			return fmt.Errorf("%w: GPU %d has insufficient usable memory for one workgroup", errGPUInitialization, d.id)
 		}
 		// reduce gpu allocations on automatic fallback
 		var g *gpuBackend
 		var openErr error
 		for attempt := 0; attempt < 10; attempt++ {
-			g, openErr = openGPU(d.id, n, p, batch)
+			g, openErr = openGPUWorkgroup(d.id, n, p, batch, chosenWG)
 			if openErr == nil {
 				break
 			}
@@ -129,8 +160,19 @@ func runGPUs(ctx context.Context, stop context.CancelFunc, scan candidateSource,
 				break
 			}
 			reduced := batch * 9 / 10
+			if chosenWG > 0 {
+				align := chosenWG / gcdInt(chosenWG, p)
+				reduced -= reduced % align
+			}
 			if reduced == batch {
-				reduced--
+				if chosenWG > 0 {
+					reduced -= chosenWG / gcdInt(chosenWG, p)
+				} else {
+					reduced--
+				}
+			}
+			if reduced < 1 {
+				break
 			}
 			if gpuVerbose {
 				fmt.Fprintf(os.Stderr, "GPU %d allocation failed at batch %d (%v); retrying batch %d\n", d.id, batch, openErr, reduced)
@@ -140,6 +182,15 @@ func runGPUs(ctx context.Context, stop context.CancelFunc, scan candidateSource,
 		if openErr != nil {
 			return fmt.Errorf("%w: GPU %d initialization: %v", errGPUInitialization, d.id, openErr)
 		}
+		// Validate actual loaded wallet parameters, including p and optional
+		// Trust Wallet pre-PBKDF2, before consuming any candidates. This
+		// exercises the requested local workgroup whenever a full group fits.
+		for vi, v := range vaults {
+			if err := verifyLoadedVaultGPU(v, g, chosenWG, prepareThreads, batch); err != nil {
+				g.close()
+				return fmt.Errorf("%w: GPU %d wallet %d KDF self-test: %v", errGPUInitialization, d.id, vi+1, err)
+			}
+		}
 		workers = append(workers, worker{d: d, g: g, batch: batch})
 		targetPct := float64(uint64(n)*1024*uint64(p)*uint64(batch)) / float64(d.mem) * 100
 		free := "unknown"
@@ -147,8 +198,11 @@ func runGPUs(ctx context.Context, stop context.CancelFunc, scan candidateSource,
 			free = fmt.Sprintf("%.0f MiB", float64(d.free)/float64(MiB))
 		}
 		if gpuVerbose {
-			fmt.Fprintf(os.Stderr, "GPU %d: %s; N=%d r=8 p=%d; total=%.0f MiB free=%s; batch=%d; scratch=%d MiB (%.1f%% VRAM); step=%s\n", d.id, d.name, n, p, float64(d.mem)/float64(MiB), free, batch, int(uint64(n)*1024*uint64(p)*uint64(batch)/MiB), targetPct, map[bool]string{true: "auto", false: strconv.Itoa(manualStep)}[manualStep == 0])
+			fmt.Fprintf(os.Stderr, "GPU %d: %s; N=%d r=8 p=%d; total=%.0f MiB free=%s; batch=%d; scratch=%d MiB (%.1f%% VRAM); step=%s; workgroup=%s; prep-threads=%d\n", d.id, d.name, n, p, float64(d.mem)/float64(MiB), free, batch, int(uint64(n)*1024*uint64(p)*uint64(batch)/MiB), targetPct, map[bool]string{true: "auto", false: strconv.Itoa(manualStep)}[manualStep == 0], fmt.Sprintf("%d (%s)", chosenWG, tuningSource), prepareThreads)
 		}
+	}
+	if onReady != nil {
+		onReady()
 	}
 	candidateCh := make(chan []byte, 8192)
 	errCh := make(chan error, len(workers)+1)
@@ -158,7 +212,7 @@ func runGPUs(ctx context.Context, stop context.CancelFunc, scan candidateSource,
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := gpuWorker(ctx, w.d, w.g, w.batch, manualStep, allowRuntimeFallback, candidateCh, vaults, processed, emit, alreadyCracked); err != nil {
+			if err := gpuWorkerTuned(ctx, w.d, w.g, w.batch, manualStep, prepareThreads, allowRuntimeFallback, candidateCh, vaults, processed, emit, alreadyCracked); err != nil {
 				select {
 				case errCh <- err:
 				default:
@@ -231,6 +285,9 @@ func processBatchCPU(ctx context.Context, batch [][]byte, vaults []vault, proces
 }
 
 func gpuWorker(ctx context.Context, d gpuDevice, g *gpuBackend, batchSize, manualStep int, allowRuntimeFallback bool, ch <-chan []byte, vaults []vault, processed *atomic.Uint64, emit emitFn, alreadyCracked func(int) bool) error {
+	return gpuWorkerTuned(ctx, d, g, batchSize, manualStep, 1, allowRuntimeFallback, ch, vaults, processed, emit, alreadyCracked)
+}
+func gpuWorkerTuned(ctx context.Context, d gpuDevice, g *gpuBackend, batchSize, manualStep, prepThreads int, allowRuntimeFallback bool, ch <-chan []byte, vaults []vault, processed *atomic.Uint64, emit emitFn, alreadyCracked func(int) bool) error {
 	currentStep := manualStep
 	if currentStep == 0 {
 		currentStep = 4096
@@ -267,7 +324,7 @@ func gpuWorker(ctx context.Context, d gpuDevice, g *gpuBackend, batchSize, manua
 			if alreadyCracked(vi) {
 				continue
 			}
-			dkList, err := gpuDeriveBatch(v, batch, g, step)
+			dkList, err := gpuDeriveBatchTuned(v, batch, g, step, prepThreads)
 			if err != nil {
 				gpuErr := fmt.Errorf("GPU %d vault %d: %w", d.id, vi+1, err)
 				if !allowRuntimeFallback {

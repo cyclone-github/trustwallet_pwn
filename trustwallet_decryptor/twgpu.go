@@ -22,6 +22,7 @@ var kernelSource string
 type gpuDevice struct {
 	id           int
 	name         string
+	driver       string
 	mem          uint64
 	free         uint64
 	maxAlloc     uint64
@@ -38,7 +39,7 @@ func gpuDevices() ([]gpuDevice, error) {
 	out := make([]gpuDevice, 0, count)
 	for i := 0; i < count; i++ {
 		d := infos[i]
-		out = append(out, gpuDevice{id: int(d.index), name: strings.TrimSpace(C.GoString(&d.name[0])), mem: uint64(d.global_mem), free: uint64(d.free_mem), maxAlloc: uint64(d.max_alloc), computeUnits: uint32(d.compute_units)})
+		out = append(out, gpuDevice{id: int(d.index), name: strings.TrimSpace(C.GoString(&d.name[0])), driver: strings.TrimSpace(C.GoString(&d.driver[0])), mem: uint64(d.global_mem), free: uint64(d.free_mem), maxAlloc: uint64(d.max_alloc), computeUnits: uint32(d.compute_units)})
 	}
 	return out, nil
 }
@@ -49,13 +50,16 @@ type gpuBackend struct {
 }
 
 func openGPU(deviceID, n, p, batch int) (*gpuBackend, error) {
-	if n < 2 || n&(n-1) != 0 || p < 1 || batch < 1 {
+	return openGPUWorkgroup(deviceID, n, p, batch, 0)
+}
+func openGPUWorkgroup(deviceID, n, p, batch, workgroup int) (*gpuBackend, error) {
+	if n < 2 || n&(n-1) != 0 || p < 1 || batch < 1 || workgroup < 0 {
 		return nil, fmt.Errorf("invalid n,p,batch")
 	}
 	src := C.CString(kernelSource)
 	defer C.free(unsafe.Pointer(src))
 	errbuf := make([]byte, 16384)
-	g := C.twgpu_open(src, C.int(deviceID), C.int(batch*p), C.int(n), (*C.char)(unsafe.Pointer(&errbuf[0])), C.size_t(len(errbuf)))
+	g := C.twgpu_open_ex(src, C.int(deviceID), C.int(batch*p), C.int(n), C.int(workgroup), (*C.char)(unsafe.Pointer(&errbuf[0])), C.size_t(len(errbuf)))
 	if g == nil {
 		return nil, fmt.Errorf("%s", cstring(errbuf))
 	}

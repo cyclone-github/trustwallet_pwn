@@ -27,6 +27,7 @@ typedef uint32_t cl_device_info;
 #define CL_TRUE 1
 #define CL_DEVICE_TYPE_GPU ((cl_device_type)4)
 #define CL_DEVICE_NAME 0x102B
+#define CL_DRIVER_VERSION 0x102D
 #define CL_DEVICE_GLOBAL_MEM_SIZE 0x101F
 #define CL_MEM_READ_WRITE (1UL << 0)
 #define CL_PROGRAM_BUILD_LOG 0x1183
@@ -56,6 +57,9 @@ extern cl_int clReleaseContext(cl_context);
 #define TW_MIB (1024ULL*1024ULL)
 #define CL_DEVICE_MAX_MEM_ALLOC_SIZE 0x1010
 #define CL_DEVICE_MAX_COMPUTE_UNITS 0x1002
+#define CL_DEVICE_MAX_WORK_GROUP_SIZE 0x1004
+#define CL_KERNEL_WORK_GROUP_SIZE 0x11B0
+extern cl_int clGetKernelWorkGroupInfo(cl_kernel, cl_device_id, cl_uint, size_t, void *, size_t *);
 // nvidia 0x4000 identifies compute capability not free memory
 // amd free memory returns values in kib
 #define CL_DEVICE_EXTENSIONS 0x1030
@@ -68,7 +72,7 @@ struct twgpu {
  cl_program program;
  cl_kernel fill, mix;
  cl_mem state, scratch[TW_SCRATCH_SEGMENTS];
- int max_lanes, N, segments, lanes_per_buffer;
+ int max_lanes, N, segments, lanes_per_buffer, workgroup;
  char name[256];
 };
 static void fail(char *s,size_t n,const char *where,cl_int rc) {
@@ -119,6 +123,8 @@ int twgpu_list(twgpu_info *infos,int max_devices,char *err,size_t errlen){
   infos[i].index=i;
   clGetDeviceInfo(devices[i],CL_DEVICE_NAME,sizeof(infos[i].name),infos[i].name,NULL);
   infos[i].name[sizeof(infos[i].name)-1]=0;
+  clGetDeviceInfo(devices[i],CL_DRIVER_VERSION,sizeof(infos[i].driver),infos[i].driver,NULL);
+  infos[i].driver[sizeof(infos[i].driver)-1]=0;
   cl_ulong total=0, maxalloc=0;
   cl_uint units=0, free_kib[2]={0,0};
   clGetDeviceInfo(devices[i],CL_DEVICE_GLOBAL_MEM_SIZE,sizeof(total),&total,NULL);
@@ -142,8 +148,8 @@ int twgpu_list(twgpu_info *infos,int max_devices,char *err,size_t errlen){
  }
  return count;
 }
-twgpu *twgpu_open(const char *source,int device_index,int max_lanes,int N,char *err,size_t errlen){
- if(max_lanes<1||N<2||(N&(N-1))){if(err&&errlen)snprintf(err,errlen,"invalid lanes or N");return NULL;}
+twgpu *twgpu_open_ex(const char *source,int device_index,int max_lanes,int N,int workgroup,char *err,size_t errlen){
+ if(max_lanes<1||N<2||(N&(N-1))||workgroup<0){if(err&&errlen)snprintf(err,errlen,"invalid lanes or N");return NULL;}
  cl_device_id devices[TW_MAX_GPU];
  int count=enumerate_gpu_ids(devices,TW_MAX_GPU,err,errlen);
  if(count<0)return NULL;
@@ -152,7 +158,7 @@ twgpu *twgpu_open(const char *source,int device_index,int max_lanes,int N,char *
  cl_int rc;
  twgpu *g=calloc(1,sizeof(*g));
  if(!g){if(err&&errlen)snprintf(err,errlen,"out of memory");return NULL;}
- g->device=d;g->max_lanes=max_lanes;g->N=N;
+ g->device=d;g->max_lanes=max_lanes;g->N=N;g->workgroup=workgroup;
  clGetDeviceInfo(d,CL_DEVICE_NAME,sizeof(g->name),g->name,NULL);
  g->name[sizeof(g->name)-1]=0;
  g->ctx=clCreateContext(NULL,1,&d,NULL,NULL,&rc);
@@ -176,9 +182,20 @@ twgpu *twgpu_open(const char *source,int device_index,int max_lanes,int N,char *
  if(!g->fill||rc!=CL_SUCCESS){fail(err,errlen,"create fill kernel",rc);goto error;}
  g->mix=clCreateKernel(g->program,"romix_mix",&rc);
  if(!g->mix||rc!=CL_SUCCESS){fail(err,errlen,"create mix kernel",rc);goto error;}
+ if(workgroup>0){
+  size_t devmax=0,maxfill=0,maxmix=0;
+  rc=clGetDeviceInfo(d,CL_DEVICE_MAX_WORK_GROUP_SIZE,sizeof(devmax),&devmax,NULL);
+  rc|=clGetKernelWorkGroupInfo(g->fill,d,CL_KERNEL_WORK_GROUP_SIZE,sizeof(maxfill),&maxfill,NULL);
+  rc|=clGetKernelWorkGroupInfo(g->mix,d,CL_KERNEL_WORK_GROUP_SIZE,sizeof(maxmix),&maxmix,NULL);
+  if(rc!=CL_SUCCESS||!devmax||!maxfill||!maxmix||(size_t)workgroup>devmax||(size_t)workgroup>maxfill||(size_t)workgroup>maxmix){
+   if(err&&errlen)snprintf(err,errlen,"workgroup %d unsupported (device=%zu, fill=%zu, mix=%zu)",workgroup,devmax,maxfill,maxmix);
+   goto error;
+  }
+ }
  size_t lane_bytes=(size_t)N*1024;
  if(!lane_bytes||((size_t)max_lanes>SIZE_MAX/lane_bytes)){
-  if(err&&errlen)snprintf(err,errlen,"size overflow");goto error;
+  if(err&&errlen)snprintf(err,errlen,"size overflow");
+  goto error;
  }
  size_t statebytes=(size_t)max_lanes*1024;
  cl_ulong maxalloc=0;
@@ -207,6 +224,9 @@ twgpu *twgpu_open(const char *source,int device_index,int max_lanes,int N,char *
  return g;
 error:twgpu_close(g);return NULL;
 }
+twgpu *twgpu_open(const char *source,int device_index,int max_lanes,int N,char *err,size_t errlen){
+ return twgpu_open_ex(source,device_index,max_lanes,N,0,err,errlen);
+}
 int twgpu_romix(twgpu *g,unsigned char *data,int lanes,int steps,char *err,size_t errlen){
  if(!g||!data||lanes<1||lanes>g->max_lanes||steps<1){if(err&&errlen)snprintf(err,errlen,"invalid ROMix argument");return -1;}
  cl_int rc=clEnqueueWriteBuffer(g->queue,g->state,CL_TRUE,0,(size_t)lanes*1024,data,0,NULL,NULL);
@@ -214,6 +234,11 @@ int twgpu_romix(twgpu *g,unsigned char *data,int lanes,int steps,char *err,size_
  const cl_uint N=(cl_uint)g->N;
  const cl_uint lpb=(cl_uint)g->lanes_per_buffer;
  const size_t global=(size_t)lanes;
+ // The last batch can contain any candidate count. For OpenCL 1.2, only
+ // use explicit workgroups when the lane count divides evenly. For a tail,
+ // use runtime-selected groups instead of padding or skipping candidates.
+ const size_t local=(size_t)g->workgroup;
+ const size_t *localptr=(local && global%local==0)?&local:NULL;
  cl_kernel kernels[]={g->fill,g->mix};
  for(int phase=0;phase<2;phase++){
   cl_kernel k=kernels[phase];
@@ -232,7 +257,7 @@ int twgpu_romix(twgpu *g,unsigned char *data,int lanes,int steps,char *err,size_
     rc=clSetKernelArg(k,11,sizeof(offset),&offset);
     rc|=clSetKernelArg(k,12,sizeof(count),&count);
     if(rc!=CL_SUCCESS){fail(err,errlen,"set kernel offset",rc);return -1;}
-    rc=clEnqueueNDRangeKernel(g->queue,k,1,NULL,&global,NULL,0,NULL,NULL);
+    rc=clEnqueueNDRangeKernel(g->queue,k,1,NULL,&global,localptr,0,NULL,NULL);
     if(rc!=CL_SUCCESS){fail(err,errlen,"enqueue ROMix",rc);return -1;}
     offset+=count;
   }

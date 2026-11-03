@@ -62,7 +62,7 @@ linux: check-linux
 
 windows: check-windows
 	@mkdir -p $(WIN_BUILD_DIR) $(DIST_DIR)/windows_amd64
-	@{ printf 'LIBRARY OpenCL.dll\nEXPORTS\n'; sed -n 's/^extern .* \(cl[A-Za-z0-9_]*\)(.*/  \1/p' trustwallet_decryptor/bridge.c; } > $(WIN_BUILD_DIR)/OpenCL.def
+	@{ printf 'LIBRARY OpenCL.dll\nEXPORTS\n'; sed -n 's/^extern .* \(cl[A-Za-z0-9_]*\)(.*/  \1/p' trustwallet_decryptor/bridge.c | sort -u; } > $(WIN_BUILD_DIR)/OpenCL.def
 	@grep -q '^  cl' $(WIN_BUILD_DIR)/OpenCL.def || { printf '%s\n' 'WARNING: Cannot extract OpenCL API exports from bridge.c.' >&2; exit 1; }
 	"$(WINDOWS_DLLTOOL)" -m i386:x86-64 -d $(WIN_BUILD_DIR)/OpenCL.def -D OpenCL.dll -l $(WIN_BUILD_DIR)/libOpenCL.a
 	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 $(GO) -C trustwallet_extractor build $(GO_BUILD_FLAGS) -o ../$(DIST_DIR)/windows_amd64/trustwallet_extractor.exe .
