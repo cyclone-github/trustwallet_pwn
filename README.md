@@ -12,7 +12,11 @@ go install github.com/cyclone-github/trustwallet_pwn/trustwallet_extractor@main
 ```
 
 ### Install trustwallet_decryptor
-```
+
+> **Windows users:** For GPU acceleration (OpenCL), download the latest [precompiled release](https://github.com/cyclone-github/trustwallet_pwn/releases) or follow the manual compilation instructions at the bottom of this README.
+>
+> Windows GPU builds require CGO, a compatible C compiler, and OpenCL linking dependencies. The standard `go install` command does not configure these dependencies automatically. With CGO disabled, it installs a CPU-only version; without the required build dependencies, installation may fail. Linux users with the required OpenCL dependencies can install GPU support directly using the `go install` command below.
+```bash
 go install github.com/cyclone-github/trustwallet_pwn/trustwallet_decryptor@main
 ```
 
@@ -104,8 +108,8 @@ Decrypted: tell priority insane episode hamster click list gym juice valve damp 
 -s {print status every nth sec}
 
 -cpu                CPU only
--gpu                OpenCL GPU only (Linux with cgo)
--hybrid             CPU + GPU workers (Linux with cgo)
+-gpu                OpenCL GPU only (Linux/Windows amd64 with cgo)
+-hybrid             CPU + GPU workers (Linux/Windows amd64 with cgo)
 -gpu-list           list OpenCL devices
 -gpu-devices 0,1    select GPU indices (default all)
 -gpu-mem 92         target GPU VRAM percentage
@@ -128,7 +132,7 @@ cat wordlist | ./trustwallet_decryptor.bin -h trustwallet.txt
 ./trustwallet_decryptor.bin -h trustwallet.txt -w wordlist.txt -chunk 1/4
 ```
 
-The elapsed time and ETA are reported for wordlist files (or the selected chunk). ETA is unavailable with stdin input. On Linux with an available OpenCL GPU, the default backend preference is hybrid, GPU, then CPU. On other platforms, CPU mode is available.
+The elapsed time and ETA are reported for wordlist files (or the selected chunk). ETA is unavailable with stdin input. On Linux or Windows amd64 with cgo and an available OpenCL GPU, the default backend preference is hybrid, GPU, then CPU. On other platforms, CPU mode is available.
 
 ---
 
@@ -143,57 +147,61 @@ The elapsed time and ETA are reported for wordlist files (or the selected chunk)
 - `1x RTX 4090: 329 h/s` (cyclone)
 - `2x RTX 4090: 658 h/s` (cyclone)
 > CPU+GPU (hybrid - default mode)
+- `Intel Core i9-14900HX + RTX 4090 Laptop GPU: 256 h/s` (64_nickel)
+- `AMD Threadripper 3960X + RTX 3090: 300 h/s` (64_nickel)
 - `2x Intel Xeon + 2x 4090: 812 h/s` (cyclone)
 
 ---
 
 # Compile from source
 
-This assumes Go and Git are installed. Linux GPU builds additionally need a C compiler and the OpenCL ICD loader (`libOpenCL.so.1`).
+Requires Go, Git, and GNU Make. GPU builds additionally require a compatible C compiler and OpenCL dependencies.
 
 ```bash
 git clone https://github.com/cyclone-github/trustwallet_pwn.git
 cd trustwallet_pwn
 ```
 
-### trustwallet_extractor
+### Install build dependencies
+
+**Linux (Debian/Ubuntu):**
 
 ```bash
-cd trustwallet_extractor
-go build -trimpath -ldflags="-s -w" -o trustwallet_extractor.bin .
-# to install
-go install -ldflags="-s -w" .
+sudo apt install make gcc libopencl1
 ```
 
-### trustwallet_decryptor
+To also cross-compile Windows GPU binaries from Linux:
 
 ```bash
-cd ../trustwallet_decryptor
-CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o trustwallet_decryptor.bin .
-# to install
-CGO_ENABLED=1 go install -ldflags="-s -w" .
+sudo apt install gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64
 ```
 
-CPU-only decryptor build (Linux/macOS shell, from `trustwallet_decryptor`):
+**Windows:**
+
+Install [MSYS2](https://www.msys2.org/) and open the **UCRT64 shell** with Go available on `PATH`.
 
 ```bash
-CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o trustwallet_decryptor.bin .
+pacman -S --needed make mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-binutils
 ```
 
-CPU-only decryptor build (Windows PowerShell, from `trustwallet_decryptor`):
+### Build extractor and decryptor
 
-```powershell
-$env:CGO_ENABLED = "0"
-go build -trimpath -ldflags="-s -w" -o trustwallet_decryptor.exe .
+Run from the repository root:
+
+```bash
+make linux        # Linux x64 with GPU/OpenCL
+make windows      # Windows x64 with GPU/OpenCL
+make linux-cpu    # Linux x64 CPU-only
+make windows-cpu  # Windows x64 CPU-only
 ```
 
----
+Each command compiles **both the extractor and decryptor**, with binaries saved to `dist/linux_amd64/` or `dist/windows_amd64/`.
 
-### Compile from source guide
+GPU builds automatically check for the required compiler and build dependencies, reporting missing tools when necessary. The Windows GPU build also generates the required OpenCL import library automatically.
 
-```
-https://github.com/cyclone-github/scripts/blob/main/intro_to_go.txt
-```
+CPU-only builds require only Go and GNU Make. GPU acceleration requires a compatible GPU, installed drivers, and an OpenCL runtime on the target system.
+
+**Note:** The `make windows` target supports native Windows compilation and cross-compilation from Linux when MinGW-w64 is installed. Linux GPU builds are recommended on native Linux.
 
 ---
 

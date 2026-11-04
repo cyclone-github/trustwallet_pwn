@@ -40,9 +40,17 @@ v0.3.1; 2026-10-27
     add JSON-compatible recovery
 v0.3.2; 2026-11-01
     fix OpenCL format warning
+v0.3.3; 2026-11-02
+    enable Windows amd64 OpenCL GPU support
+v0.3.4-dev; 2026-11-03
+    experimental GPU workgroup tuning and parallel Trust Wallet SHA512 preprocessing
+v0.3.5; 2026-11-03
+    automatic cached GPU batch/workgroup calibration with real wallet N/p; auto prethreads
+v0.3.6-dev; 2026-11-03
+    cached byte-based wordlist indexing and seek; exclude indexing/calibration from h/s
 */
 
-const version = "v0.3.2"
+const version = "v0.3.6-dev"
 
 func main() {
 	wordPath := flag.String("w", "", "Wordlist file (default stdin)")
@@ -51,6 +59,7 @@ func main() {
 	threads := flag.Int("t", runtime.NumCPU(), "CPU threads")
 	statsSec := flag.Int("s", 60, "Status interval seconds")
 	chunkSpec := flag.String("chunk", "", "Process 1-based wordlist chunk k/n; requires -w")
+	reindex := flag.Bool("wordlist-reindex", false, "Rebuild wordlist count and sparse seek index, bypassing cache")
 	gpuFlag := flag.Bool("gpu", false, "Force GPU-only backend")
 	cpuFlag := flag.Bool("cpu", false, "Force CPU-only backend")
 	hybridFlag := flag.Bool("hybrid", false, "Force concurrent GPU and CPU workers")
@@ -59,6 +68,8 @@ func main() {
 	gpuMem := flag.Int("gpu-mem", 92, "Target GPU VRAM percentage")
 	gpuBatch := flag.Int("gpu-batch", 0, "GPU batch 0=auto")
 	gpuStep := flag.Int("gpu-step", 0, "GPU kernel step 0=auto")
+	gpuWorkgroup := flag.Int("gpu-workgroup", -1, "GPU OpenCL workgroup -1=auto-tune (default), 0=driver, >0=manual")
+	gpuPreThreads := flag.Int("gpu-prethreads", 0, "CPU preparation threads per GPU 0=auto (default), 1=serial")
 	gpuDiag := flag.Bool("gpu-verbose", false, "Print GPU tuning information")
 	helpFlag := flag.Bool("help", false, "Help")
 	versionFlag := flag.Bool("version", false, "Version")
@@ -81,7 +92,7 @@ func main() {
 	if boolInt(*cpuFlag)+boolInt(*gpuFlag)+boolInt(*hybridFlag) > 1 {
 		log.Fatal("-cpu, -gpu and -hybrid are mutually exclusive")
 	}
-	if *gpuMem < 50 || *gpuMem > 96 || *gpuBatch < 0 || *gpuStep < 0 || *statsSec < 0 {
+	if *gpuMem < 50 || *gpuMem > 96 || *gpuBatch < 0 || *gpuStep < 0 || *gpuWorkgroup < -1 || *gpuPreThreads < 0 || *statsSec < 0 {
 		log.Fatal("invalid tuning or status flag")
 	}
 	if *threads < 1 || *threads > runtime.NumCPU() {
@@ -98,7 +109,7 @@ func main() {
 			if d.free > 0 {
 				free = fmt.Sprintf("%.0f MiB", float64(d.free)/float64(MiB))
 			}
-			fmt.Printf("GPU %d: %s | total=%.0f MiB free=%s max-alloc=%.0f MiB compute-units=%d\n", d.id, d.name, float64(d.mem)/float64(MiB), free, float64(d.maxAlloc)/float64(MiB), d.computeUnits)
+			fmt.Printf("GPU %d: %s (driver %s) | total=%.0f MiB free=%s max-alloc=%.0f MiB compute-units=%d\n", d.id, d.name, d.driver, float64(d.mem)/float64(MiB), free, float64(d.maxAlloc)/float64(MiB), d.computeUnits)
 		}
 		return
 	}
@@ -122,6 +133,7 @@ func main() {
 		input = f
 	}
 	var chunkStart, chunkEnd, totalLines, attackLines uint64
+	var wordIndex wordlistIndex
 	if *wordPath != "" {
 		file := input.(*os.File)
 		info, err := file.Stat()
@@ -132,9 +144,14 @@ func main() {
 			log.Fatal("-chunk requires a regular wordlist file")
 		}
 		if info.Mode().IsRegular() {
-			totalLines, err = countWordlistLines(file)
+			var hit bool
+			wordIndex, hit, err = loadOrBuildWordlistIndex(file, info, *reindex)
 			if err != nil {
-				log.Fatalf("wordlist count: %v", err)
+				log.Fatalf("wordlist index: %v", err)
+			}
+			totalLines = wordIndex.TotalLines
+			if gpuVerbose {
+				fmt.Fprintf(os.Stderr, "Wordlist index (%s): %d lines, %d checkpoints\n", map[bool]string{true: "cache", false: "scan"}[hit], totalLines, len(wordIndex.Offsets))
 			}
 			if _, err := file.Seek(0, io.SeekStart); err != nil {
 				log.Fatalf("wordlist seek: %v", err)
@@ -151,6 +168,12 @@ func main() {
 			log.Fatalf("-chunk %s: empty range", *chunkSpec)
 		}
 		attackLines = chunkEnd - chunkStart
+	}
+
+	if *chunkSpec != "" {
+		if err := seekWordlistLine(input.(*os.File), wordIndex, chunkStart); err != nil {
+			log.Fatalf("wordlist chunk seek: %v", err)
+		}
 	}
 
 	output := os.Stdout
@@ -181,7 +204,11 @@ func main() {
 			log.Fatalf("GPU requested but none available: %v", err)
 		}
 	}
-	cpuOK, healthy, testLabel := selfTestResults(!*gpuFlag, !*cpuFlag, devices)
+	testWG := *gpuWorkgroup
+	if testWG < 0 {
+		testWG = 0
+	}
+	cpuOK, healthy, testLabel := selfTestResultsTuned(!*gpuFlag, !*cpuFlag, devices, testWG)
 	gpuOK := len(healthy) > 0
 	if strings.Contains(testLabel, "FAIL") {
 		fmt.Fprintf(os.Stderr, "Self-test:\t%s\n", testLabel)
@@ -199,6 +226,17 @@ func main() {
 	}
 	runGPUDevices := strings.Join(runGPUIDs, ",")
 	mode, modeErr := chooseBackend(*cpuFlag, *gpuFlag, *hybridFlag, gpuOK, cpuOK)
+	// Real Trust Wallet SHA512 preprocessing must reserve CPU resources to
+	// feed GPU workers. Automatically prefer GPU-only in that case rather
+	// than consuming every CPU with competing hybrid scrypt workers.
+	if !*cpuFlag && !*gpuFlag && !*hybridFlag && gpuOK {
+		for _, v := range vaults {
+			if v.presalt != nil {
+				mode = modeGPU
+				break
+			}
+		}
+	}
 	if modeErr != nil {
 		log.Fatal(modeErr)
 	}
@@ -253,47 +291,61 @@ func main() {
 			stop()
 		}
 	}
-	start := time.Now()
+	var start time.Time
 	done := make(chan struct{})
 	var statusWG sync.WaitGroup
-	if *statsSec > 0 {
-		statusWG.Add(1)
-		go func() {
-			defer statusWG.Done()
-			tick := time.NewTicker(time.Duration(*statsSec) * time.Second)
-			defer tick.Stop()
-			for {
-				select {
-				case <-tick.C:
-					log.Print(formatStatus(time.Since(start), int(matched.Load()), len(vaults), processed.Load(), attackLines))
-				case <-done:
-					return
-				}
+	var startOnce sync.Once
+	startProcessing := func() {
+		startOnce.Do(func() {
+			start = time.Now()
+			log.Println("Working...")
+			if *statsSec > 0 {
+				statusWG.Add(1)
+				go func() {
+					defer statusWG.Done()
+					tick := time.NewTicker(time.Duration(*statsSec) * time.Second)
+					defer tick.Stop()
+					for {
+						select {
+						case <-tick.C:
+							log.Print(formatStatus(time.Since(start), int(matched.Load()), len(vaults), processed.Load(), attackLines))
+						case <-done:
+							return
+						}
+					}
+				}()
 			}
-		}()
+		})
 	}
 	scan := bufio.NewScanner(input)
 	scan.Buffer(make([]byte, 4096), 16*1024*1024)
 	var candidates candidateSource = scan
 	if *chunkSpec != "" {
-		candidates = newChunkScanner(scan, chunkStart, chunkEnd)
+		// Input is already positioned at the first line of this chunk.
+		candidates = newChunkScanner(scan, 0, chunkEnd-chunkStart)
 	}
 	var runErr error
 	if useGPU {
-		runErr = runGPUs(ctx, stop, candidates, vaults, runGPUDevices, *gpuMem, *gpuBatch, *gpuStep, hybridThreads, cpuOK && !*gpuFlag && !*hybridFlag, &processed, emit, alreadyCracked)
+		runErr = runGPUsTuned(ctx, stop, candidates, vaults, runGPUDevices, *gpuMem, *gpuBatch, *gpuStep, *gpuWorkgroup, *gpuPreThreads, hybridThreads, cpuOK && !*gpuFlag && !*hybridFlag, &processed, emit, alreadyCracked, startProcessing)
 		if runErr != nil && errors.Is(runErr, errGPUInitialization) && !*gpuFlag && !*hybridFlag {
 			log.Printf("GPU initialization failed (%v); falling back to CPU", runErr)
 			log.Println("Backend:\tCPU (fallback)")
 			useGPU = false
+			startProcessing()
 			runErr = runCPU(ctx, candidates, vaults, *threads, &processed, emit, alreadyCracked)
 		}
 	} else {
+		startProcessing()
 		runErr = runCPU(ctx, candidates, vaults, *threads, &processed, emit, alreadyCracked)
 	}
 	close(done)
 	statusWG.Wait()
 	log.Println("Finished")
-	log.Print(formatStatus(time.Since(start), int(matched.Load()), len(vaults), processed.Load(), attackLines))
+	elapsed := time.Duration(0)
+	if !start.IsZero() {
+		elapsed = time.Since(start)
+	}
+	log.Print(formatStatus(elapsed, int(matched.Load()), len(vaults), processed.Load(), attackLines))
 	if runErr != nil {
 		log.Printf("Error: %v", runErr)
 		os.Exit(1)

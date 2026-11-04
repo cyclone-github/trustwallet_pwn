@@ -1,4 +1,4 @@
-//go:build linux && cgo
+//go:build cgo && (linux || (windows && amd64))
 
 #ifndef TW_BRIDGE_H
 #define TW_BRIDGE_H
@@ -12,10 +12,12 @@ typedef struct twgpu_info {
  uint64_t max_alloc;
  uint32_t compute_units;
  char name[256];
+ char driver[256];
 } twgpu_info;
 // enumerate opencl gpus in stable order
 int twgpu_list(twgpu_info *infos, int max_devices, char *error, size_t errorlen);
 twgpu *twgpu_open(const char *source, int device_index, int max_lanes, int N, char *error, size_t errorlen);
+twgpu *twgpu_open_ex(const char *source, int device_index, int max_lanes, int N, int workgroup, char *error, size_t errorlen);
 int twgpu_romix(twgpu *gpu, unsigned char *data, int lanes, int steps, char *error, size_t errorlen);
 void twgpu_close(twgpu *gpu);
 const char *twgpu_name(twgpu *gpu);

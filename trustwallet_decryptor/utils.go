@@ -151,3 +151,15 @@ func cpuBackendReady() bool {
 	v, err := pbkdf2Derive([]byte("probe"), []byte("salt"), 1, 32, false)
 	return err == nil && len(v) == 32
 }
+
+// gcdInt determines the candidate batch alignment needed for a workgroup
+// when one password produces p parallel scrypt lanes.
+func gcdInt(a, b int) int {
+	for b != 0 {
+		a, b = b, a%b
+	}
+	if a < 0 {
+		a = -a
+	}
+	return a
+}

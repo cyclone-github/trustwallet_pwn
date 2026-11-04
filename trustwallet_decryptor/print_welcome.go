@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"strings"
 )
@@ -24,7 +23,6 @@ func printWelcome(vaultPath, wordPath string, total, threads int, gpuLabel, back
 	}
 	fmt.Fprintf(os.Stderr, "Backend:\t%s\n", backend)
 	fmt.Fprintf(os.Stderr, "Self-test:\t%s\n", testLabel)
-	log.Println("Working...")
 }
 
 // print each gpu name once
@@ -65,15 +63,18 @@ func helpText() {
 -cpu                 force CPU-only backend
 -gpu                 force OpenCL GPU-only backend
 -hybrid              force GPU + CPU concurrent workers
-(no backend flag)    prefer hybrid, then GPU-only, then CPU-only
+(no backend flag)    auto: GPU-only for pre-PBKDF2 wallets; otherwise hybrid when available
 -gpu-list            list detected GPUs
 -gpu-devices 0,1     GPU device selection (default all)
 -gpu-mem 92          max percentage of VRAM (default 92)
 -gpu-batch 0         automatic per-GPU batch (0=auto)
 -gpu-step 0          automatic per-GPU kernel step (0=auto)
+-gpu-workgroup -1    -1=autotune (default), 0=driver, >0=explicit
+-gpu-prethreads 0    per-GPU CPU preparation workers; 0=auto (default)
 -gpu-verbose         print GPU device and autotuning details
 -t {threads}         CPU workers (default all logical CPUs, also in hybrid)
 -chunk k/n           process 1-based contiguous wordlist partition k/n; requires -w
+-wordlist-reindex    force recount/rebuild of cached wordlist index
 ETA                 shown for regular wordlists, unavailable for stdin
 
 -version -help
