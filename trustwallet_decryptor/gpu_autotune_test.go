@@ -9,7 +9,7 @@ import (
 
 func TestTuneBatchCandidates(t *testing.T) {
 	got := tuneBatchCandidates(320, 0)
-	if len(got) != 4 || got[0] != 144 || got[1] != 224 || got[2] != 272 || got[3] != 320 {
+	if len(got) != 5 || got[0] != 144 || got[1] != 224 || got[2] != 272 || got[3] != 304 || got[4] != 320 {
 		t.Fatalf("unexpected auto batch choices %v", got)
 	}
 	manual := tuneBatchCandidates(320, 100)

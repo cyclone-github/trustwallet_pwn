@@ -15,7 +15,7 @@ import (
 
 // autoTuneRevision must change when the ROMix kernel, bridge, or tuning
 // methodology changes, because the cache is deliberately per device/KDF.
-const autoTuneRevision = "tw-gpu-autotune-v1-20261103"
+const autoTuneRevision = "tw-gpu-autotune-v2-20261106"
 
 type gpuTuneChoice struct {
 	Batch     int     `json:"batch"`
@@ -118,7 +118,7 @@ func tuneBatchCandidates(maxBatch, forcedBatch int) []int {
 	}
 	seen := make(map[int]bool)
 	var out []int
-	for _, fraction := range []float64{0.45, 0.70, 0.85, 1.0} {
+	for _, fraction := range []float64{0.45, 0.70, 0.85, 0.95, 1.0} {
 		b := int(float64(maxBatch) * fraction)
 		if b < 1 {
 			b = 1
@@ -136,9 +136,9 @@ func tuneWorkgroupCandidates(forced int) []int {
 	if forced >= 0 {
 		return []int{forced}
 	}
-	// 32 matches NVIDIA warp width, 64 is typical AMD wavefront width.
-	// 0 gives the OpenCL driver's preferred choice.
-	return []int{32, 64, 128, 0}
+	// Include small workgroups, which can outperform warp-sized groups on
+	// some GPUs. 0 gives the OpenCL driver's preferred choice.
+	return []int{1, 2, 4, 8, 16, 32, 64, 128, 256, 0}
 }
 
 func benchmarkGPUChoice(deviceID, n, p, batch, workgroup, step int) (float64, error) {

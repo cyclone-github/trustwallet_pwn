@@ -48,9 +48,11 @@ v0.3.5; 2026-11-03
     automatic cached GPU batch/workgroup calibration with real wallet N/p; auto prethreads
 v0.3.6-dev; 2026-11-03
     cached byte-based wordlist indexing and seek; exclude indexing/calibration from h/s
+v0.3.7-dev; 2026-11-06
+    expand GPU autotune workgroup and batch candidate ranges
 */
 
-const version = "v0.3.6-dev"
+const version = "v0.3.7-dev"
 
 func main() {
 	wordPath := flag.String("w", "", "Wordlist file (default stdin)")
