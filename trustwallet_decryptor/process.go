@@ -47,15 +47,20 @@ func consumeCPU(ctx context.Context, ch <-chan []byte, vaults []vault, threads i
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			scratch := acquireCPUScratch()
+			defer releaseCPUScratch(scratch)
 			for pw := range ch {
 				if ctx.Err() != nil {
 					return
 				}
 				for vi, v := range vaults {
+					if ctx.Err() != nil {
+						return
+					}
 					if alreadyCracked(vi) {
 						continue
 					}
-					dk, err := cpuDerive(v, pw)
+					dk, err := cpuDeriveWithScratch(scratch, v, pw)
 					if err != nil {
 						errOnce.Do(func() { firstErr = err })
 						continue
@@ -114,6 +119,7 @@ func runGPUsTuned(ctx context.Context, stop context.CancelFunc, scan candidateSo
 		}
 	}()
 	n, p := vaults[0].n, vaults[0].p
+	workload := gpuTuneWorkload(vaults)
 	if prepareThreads == 0 {
 		prepareThreads = runtime.GOMAXPROCS(0) / len(selected)
 		if cpuThreads > 0 {
@@ -131,7 +137,7 @@ func runGPUsTuned(ctx context.Context, stop context.CancelFunc, scan candidateSo
 		batch := manualBatch
 		tuningSource := "manual"
 		if batch == 0 || chosenWG == -1 {
-			choice, origin, tuneErr := selectGPUTuning(d, n, p, memPercent, manualBatch, workgroup, manualStep, vaults[0].presalt != nil)
+			choice, origin, tuneErr := selectGPUTuning(d, workload, n, p, memPercent, manualBatch, workgroup, manualStep)
 			if tuneErr != nil {
 				return fmt.Errorf("%w: GPU %d auto-tune: %v", errGPUInitialization, d.id, tuneErr)
 			}
@@ -263,15 +269,20 @@ scanloop:
 // retry failed gpu batches on cpu
 
 func processBatchCPU(ctx context.Context, batch [][]byte, vaults []vault, processed *atomic.Uint64, emit emitFn, alreadyCracked func(int) bool) error {
+	scratch := acquireCPUScratch()
+	defer releaseCPUScratch(scratch)
 	for _, pw := range batch {
 		if err := ctx.Err(); err != nil {
 			return nil
 		}
 		for vi, v := range vaults {
+			if ctx.Err() != nil {
+				return nil
+			}
 			if alreadyCracked(vi) {
 				continue
 			}
-			dk, err := cpuDerive(v, pw)
+			dk, err := cpuDeriveWithScratch(scratch, v, pw)
 			if err != nil {
 				return err
 			}
@@ -288,6 +299,11 @@ func gpuWorker(ctx context.Context, d gpuDevice, g *gpuBackend, batchSize, manua
 	return gpuWorkerTuned(ctx, d, g, batchSize, manualStep, 1, allowRuntimeFallback, ch, vaults, processed, emit, alreadyCracked)
 }
 func gpuWorkerTuned(ctx context.Context, d gpuDevice, g *gpuBackend, batchSize, manualStep, prepThreads int, allowRuntimeFallback bool, ch <-chan []byte, vaults []vault, processed *atomic.Uint64, emit emitFn, alreadyCracked func(int) bool) error {
+	if gpuPrepPipelineEnabled && len(vaults) == 1 {
+		return gpuWorkerPipelinedSingleVault(ctx, d, g, batchSize, manualStep, prepThreads, allowRuntimeFallback, ch, vaults[0], processed, emit, alreadyCracked)
+	}
+	hostScratch := acquireCPUScratch()
+	defer releaseCPUScratch(hostScratch)
 	currentStep := manualStep
 	if currentStep == 0 {
 		currentStep = 4096
@@ -324,7 +340,7 @@ func gpuWorkerTuned(ctx context.Context, d gpuDevice, g *gpuBackend, batchSize, 
 			if alreadyCracked(vi) {
 				continue
 			}
-			dkList, err := gpuDeriveBatchTuned(v, batch, g, step, prepThreads)
+			dkList, err := gpuDeriveBatchWithScratch(v, batch, g, step, prepThreads, hostScratch)
 			if err != nil {
 				gpuErr := fmt.Errorf("GPU %d vault %d: %w", d.id, vi+1, err)
 				if !allowRuntimeFallback {

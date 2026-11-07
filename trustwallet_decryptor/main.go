@@ -50,9 +50,12 @@ v0.3.6-dev; 2026-11-03
     cached byte-based wordlist indexing and seek; exclude indexing/calibration from h/s
 v0.3.7-dev; 2026-11-06
     expand GPU autotune workgroup and batch candidate ranges
+v0.3.8-dev; 2026-11-07
+    reuse GPU tuning by device type and wallet/KDF profile
+	fix ctrl+c shutdown
 */
 
-const version = "v0.3.7-dev"
+const version = "v0.3.8-dev"
 
 func main() {
 	wordPath := flag.String("w", "", "Wordlist file (default stdin)")
@@ -72,12 +75,14 @@ func main() {
 	gpuStep := flag.Int("gpu-step", 0, "GPU kernel step 0=auto")
 	gpuWorkgroup := flag.Int("gpu-workgroup", -1, "GPU OpenCL workgroup -1=auto-tune (default), 0=driver, >0=manual")
 	gpuPreThreads := flag.Int("gpu-prethreads", 0, "CPU preparation threads per GPU 0=auto (default), 1=serial")
+	gpuPipeline := flag.Bool("gpu-pipeline", true, "Overlap CPU preparation with GPU processing for single-vault jobs (default true; -gpu-pipeline=false disables)")
 	gpuDiag := flag.Bool("gpu-verbose", false, "Print GPU tuning information")
 	helpFlag := flag.Bool("help", false, "Help")
 	versionFlag := flag.Bool("version", false, "Version")
 	cycloneFlag := flag.Bool("cyclone", false, "")
 	flag.Parse()
 	gpuVerbose = *gpuDiag
+	gpuPrepPipelineEnabled = *gpuPipeline
 	if *versionFlag {
 		fmt.Fprintf(os.Stderr, "Cyclone's TrustWallet Vault Decryptor %s\n", version)
 		return
@@ -275,6 +280,13 @@ func main() {
 	alreadyCracked := func(vi int) bool { return found[vi].Load() }
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// The first interrupt requests graceful cancellation. Restore the default
+	// signal action immediately afterward so a second Ctrl+C can terminate a
+	// process stuck in a non-interruptible KDF or OpenCL driver call.
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
 	emit := func(vi int, v vault, pw, dk []byte) {
 		if !found[vi].CompareAndSwap(false, true) {
 			return

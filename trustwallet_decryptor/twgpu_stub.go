@@ -19,7 +19,11 @@ type gpuDevice struct {
 
 func gpuDevices() ([]gpuDevice, error) { return nil, errNoOpenCL }
 
-type gpuBackend struct{ n, p int }
+type gpuBackend struct {
+	n, p     int
+	hostB    []byte
+	hostPass []byte
+}
 
 func openGPU(deviceID, n, p, batch int) (*gpuBackend, error) { return nil, errNoOpenCL }
 func openGPUWorkgroup(deviceID, n, p, batch, workgroup int) (*gpuBackend, error) {

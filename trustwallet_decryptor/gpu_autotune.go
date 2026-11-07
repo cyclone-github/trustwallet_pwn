@@ -10,12 +10,13 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"time"
 )
 
-// autoTuneRevision must change when the ROMix kernel, bridge, or tuning
-// methodology changes, because the cache is deliberately per device/KDF.
-const autoTuneRevision = "tw-gpu-autotune-v2-20261106"
+// Keep GPU tuning profiles tied to the application release. A new release
+// must change this ID when the kernel, bridge or tuning methodology changes.
+const autoTuneRevision = "tw-gpu-autotune-v0.3.8"
 
 type gpuTuneChoice struct {
 	Batch     int     `json:"batch"`
@@ -26,7 +27,47 @@ type gpuTuneChoice struct {
 type gpuTuneCache struct {
 	Revision    string        `json:"revision"`
 	Fingerprint string        `json:"fingerprint"`
+	GPUName     string        `json:"gpu_name,omitempty"`  // Display only; not part of cache matching.
+	HashType    string        `json:"hash_type,omitempty"` // Display only; canonical workload remains authoritative.
+	Workload    string        `json:"workload"`
 	Choice      gpuTuneChoice `json:"choice"`
+}
+
+// Human-readable labels for cache inspection. These never replace the existing
+// fingerprint/workload checks, and contain no wallet-specific material.
+func gpuTuneHashType(workload string) string {
+	switch {
+	case strings.Contains(workload, ";"):
+		return "mixed wallet types"
+	case strings.Contains(workload, "pre=trust:pbkdf2"):
+		return "trust:pbkdf2 (desktop)"
+	case strings.Contains(workload, "pre=none"):
+		return "standard scrypt (iOS-compatible)"
+	default:
+		return "other"
+	}
+}
+
+// gpuTuneWorkload describes the cryptographic work without including wallet
+// secrets, salt, ciphertext, wordlist or file path. It is stable across wallets
+// of the same kind and parameters, and independent of vault order/count.
+// Mixed standard and trust:pbkdf2 vaults get a separate profile.
+func gpuTuneWorkload(vaults []vault) string {
+	kinds := make(map[string]struct{}, len(vaults))
+	for _, v := range vaults {
+		pre := "none"
+		if v.presalt != nil {
+			pre = "trust:pbkdf2-sha512-i20000"
+		}
+		kind := fmt.Sprintf("%s|N=%d|r=%d|p=%d|dklen=%d|pre=%s", v.kdf, v.n, v.r, v.p, v.dklen, pre)
+		kinds[kind] = struct{}{}
+	}
+	parts := make([]string, 0, len(kinds))
+	for kind := range kinds {
+		parts = append(parts, kind)
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ";")
 }
 
 // A batch must not exceed the currently selected memory limit, even when a
@@ -41,11 +82,18 @@ func validTuneChoice(c gpuTuneChoice, maxBatch, n, p int) bool {
 	return n >= 2 && p >= 1
 }
 
-func gpuTuneKey(d gpuDevice, n, p, memoryPercent, forcedBatch, forcedWorkgroup, step int, hasPreprocess bool) string {
-	// No salt, ciphertext, candidate or password is stored in this fingerprint.
-	value := fmt.Sprintf("%s|%s|%s|%d|%d|%d|%d|%d|%d|%d|%d|%t|%s", autoTuneRevision,
-		runtime.GOOS, d.name+"@"+d.driver, d.id, d.mem, d.maxAlloc, d.computeUnits,
-		n, p, memoryPercent, forcedBatch, hasPreprocess, fmt.Sprintf("%d|%d", forcedWorkgroup, step))
+// Identical GPUs on this host share a profile regardless of OpenCL index.
+// Driver, reported VRAM, and allocation capabilities remain part of identity.
+func gpuModelKey(d gpuDevice) string {
+	value := fmt.Sprintf("%s|%s|%s|%s|%d|%d|%d", autoTuneRevision,
+		runtime.GOOS, d.name, d.driver, d.mem, d.maxAlloc, d.computeUnits)
+	h := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(h[:])
+}
+
+func gpuTuneKey(d gpuDevice, workload string, n, p, memoryPercent, forcedBatch, forcedWorkgroup, step int) string {
+	value := fmt.Sprintf("%s|%s|%d|%d|%d|%d|%d|%d", gpuModelKey(d), workload,
+		n, p, memoryPercent, forcedBatch, forcedWorkgroup, step)
 	h := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(h[:])
 }
@@ -58,7 +106,7 @@ func gpuTuneCachePath(key string) (string, error) {
 	return filepath.Join(root, "trustwallet_pwn", "gpu-tune-"+key+".json"), nil
 }
 
-func loadGPUTune(key string, maxBatch, n, p int) (gpuTuneChoice, bool) {
+func loadGPUTune(gpuName, key, workload string, maxBatch, n, p int) (gpuTuneChoice, bool) {
 	path, err := gpuTuneCachePath(key)
 	if err != nil {
 		return gpuTuneChoice{}, false
@@ -68,24 +116,36 @@ func loadGPUTune(key string, maxBatch, n, p int) (gpuTuneChoice, bool) {
 		return gpuTuneChoice{}, false
 	}
 	var entry gpuTuneCache
-	if json.Unmarshal(data, &entry) != nil || entry.Revision != autoTuneRevision || entry.Fingerprint != key || !validTuneChoice(entry.Choice, maxBatch, n, p) {
+	if json.Unmarshal(data, &entry) != nil || entry.Revision != autoTuneRevision || entry.Fingerprint != key || entry.Workload != workload || !validTuneChoice(entry.Choice, maxBatch, n, p) {
 		return gpuTuneChoice{}, false
+	}
+	// Annotate older entries on first use without changing the tuning decision.
+	// The fingerprint, rather than these display fields, controls cache validity.
+	if entry.GPUName == "" || entry.HashType == "" {
+		entry.GPUName = gpuName
+		entry.HashType = gpuTuneHashType(workload)
+		if contents, err := json.MarshalIndent(entry, "", "  "); err == nil {
+			writeTuneFile(path, append(contents, '\n'))
+		}
 	}
 	return entry.Choice, true
 }
 
-func saveGPUTune(key string, choice gpuTuneChoice) {
+func saveGPUTune(gpuName, key, workload string, choice gpuTuneChoice) {
 	path, err := gpuTuneCachePath(key)
-	if err != nil {
+	if err != nil || os.MkdirAll(filepath.Dir(path), 0700) != nil {
 		return
 	}
-	if os.MkdirAll(filepath.Dir(path), 0700) != nil {
-		return
+	contents, err := json.MarshalIndent(gpuTuneCache{
+		Revision: autoTuneRevision, Fingerprint: key, GPUName: gpuName,
+		HashType: gpuTuneHashType(workload), Workload: workload, Choice: choice,
+	}, "", "  ")
+	if err == nil {
+		writeTuneFile(path, append(contents, '\n'))
 	}
-	contents, err := json.Marshal(gpuTuneCache{Revision: autoTuneRevision, Fingerprint: key, Choice: choice})
-	if err != nil {
-		return
-	}
+}
+
+func writeTuneFile(path string, contents []byte) {
 	f, err := os.CreateTemp(filepath.Dir(path), ".gpu-tune-*")
 	if err != nil {
 		return
@@ -98,7 +158,7 @@ func saveGPUTune(key string, choice gpuTuneChoice) {
 	if err = f.Close(); err != nil {
 		return
 	}
-	// Best effort. Concurrent cluster processes may calibrate independently.
+	// Concurrent processes may tune independently; atomic rename avoids partial JSON.
 	_ = os.Rename(f.Name(), path)
 }
 
@@ -118,7 +178,7 @@ func tuneBatchCandidates(maxBatch, forcedBatch int) []int {
 	}
 	seen := make(map[int]bool)
 	var out []int
-	for _, fraction := range []float64{0.45, 0.70, 0.85, 0.95, 1.0} {
+	for _, fraction := range []float64{0.70, 0.90, 1.0} {
 		b := int(float64(maxBatch) * fraction)
 		if b < 1 {
 			b = 1
@@ -136,9 +196,10 @@ func tuneWorkgroupCandidates(forced int) []int {
 	if forced >= 0 {
 		return []int{forced}
 	}
-	// Include small workgroups, which can outperform warp-sized groups on
-	// some GPUs. 0 gives the OpenCL driver's preferred choice.
-	return []int{1, 2, 4, 8, 16, 32, 64, 128, 256, 0}
+	// Keep the useful smaller workgroups found on RTX 4090/5090, with
+	// WG 32/64 and driver selection (0) for other GPU architectures.
+	// Explicit -gpu-workgroup can still select excluded extremes.
+	return []int{4, 8, 16, 32, 64, 0}
 }
 
 func benchmarkGPUChoice(deviceID, n, p, batch, workgroup, step int) (float64, error) {
@@ -175,10 +236,10 @@ func benchmarkGPUChoice(deviceID, n, p, batch, workgroup, step int) (float64, er
 	return float64(2*batch) / elapsed, nil
 }
 
-// selectGPUTuning measures combinations at the loaded vault's real N and p.
-// It does not benchmark the wallet's optional CPU pre-PBKDF2, which is tuned
-// separately by the preparation worker count. Manual values stay authoritative.
-func selectGPUTuning(d gpuDevice, n, p, memPercent, forcedBatch, forcedWorkgroup, step int, hasPreprocess bool) (gpuTuneChoice, string, error) {
+// selectGPUTuning uses exact hardware, KDF-parameter and wallet-type profiles.
+// Preprocessing affects the cache identity even though the ROMix microbenchmark
+// does not measure it. Manual values stay authoritative.
+func selectGPUTuning(d gpuDevice, workload string, n, p, memPercent, forcedBatch, forcedWorkgroup, step int) (gpuTuneChoice, string, error) {
 	maxBatch := batchForDevice(d, n, 8, p, memPercent)
 	if maxBatch < 1 {
 		return gpuTuneChoice{}, "", fmt.Errorf("insufficient GPU scratch memory")
@@ -186,8 +247,8 @@ func selectGPUTuning(d gpuDevice, n, p, memPercent, forcedBatch, forcedWorkgroup
 	if forcedBatch > 0 && forcedBatch > maxBatch {
 		return gpuTuneChoice{}, "", fmt.Errorf("-gpu-batch %d exceeds memory budget (%d candidates)", forcedBatch, maxBatch)
 	}
-	key := gpuTuneKey(d, n, p, memPercent, forcedBatch, forcedWorkgroup, step, hasPreprocess)
-	if choice, ok := loadGPUTune(key, maxBatch, n, p); ok {
+	key := gpuTuneKey(d, workload, n, p, memPercent, forcedBatch, forcedWorkgroup, step)
+	if choice, ok := loadGPUTune(d.name, key, workload, maxBatch, n, p); ok {
 		return choice, "cache", nil
 	}
 	candidates := tuneBatchCandidates(maxBatch, forcedBatch)
@@ -225,6 +286,6 @@ func selectGPUTuning(d gpuDevice, n, p, memPercent, forcedBatch, forcedWorkgroup
 		// Safe fallback: the original memory-based automatic configuration.
 		return gpuTuneChoice{Batch: maxBatch, Workgroup: 0, Rate: 1}, "fallback", nil
 	}
-	saveGPUTune(key, best)
+	saveGPUTune(d.name, key, workload, best)
 	return best, "benchmark", nil
 }

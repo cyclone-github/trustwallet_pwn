@@ -47,6 +47,8 @@ func gpuDevices() ([]gpuDevice, error) {
 type gpuBackend struct {
 	gpu         *C.twgpu
 	batch, p, n int
+	hostB       []byte
+	hostPass    []byte
 }
 
 func openGPU(deviceID, n, p, batch int) (*gpuBackend, error) {

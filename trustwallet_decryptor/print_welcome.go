@@ -71,6 +71,7 @@ func helpText() {
 -gpu-step 0          automatic per-GPU kernel step (0=auto)
 -gpu-workgroup -1    -1=autotune (default), 0=driver, >0=explicit
 -gpu-prethreads 0    per-GPU CPU preparation workers; 0=auto (default)
+-gpu-pipeline         experimental overlap of CPU prep with GPU processing (default off)
 -gpu-verbose         print GPU device and autotuning details
 -t {threads}         CPU workers (default all logical CPUs, also in hybrid)
 -chunk k/n           process 1-based contiguous wordlist partition k/n; requires -w
