@@ -55,7 +55,7 @@ v0.3.8-dev; 2026-11-07
 	fix ctrl+c shutdown
 */
 
-const version = "v0.3.8-dev"
+const version = "v0.3.8; 2026-11-14"
 
 func main() {
 	wordPath := flag.String("w", "", "Wordlist file (default stdin)")
@@ -84,7 +84,7 @@ func main() {
 	gpuVerbose = *gpuDiag
 	gpuPrepPipelineEnabled = *gpuPipeline
 	if *versionFlag {
-		fmt.Fprintf(os.Stderr, "Cyclone's TrustWallet Vault Decryptor %s\n", version)
+		fmt.Fprintf(os.Stderr, "Cyclone's TrustWallet Vault Decryptor %s\nhttps://github.com/cyclone-github/trustwallet_pwn\n", version)
 		return
 	}
 	if *cycloneFlag {
