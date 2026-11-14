@@ -34,17 +34,16 @@ v0.2.0; 2026-03-06
 v0.3.1; 2026-10-27
 	json keystore support
 	version alignment and comment cleanup
-v0.3.3; 2026-11-02
-	align toolkit version
-v0.3.5; 2026-11-03
+v0.3.8; 2026-11-14
 	align extractor and decryptor toolkit release version
 */
+
 func versionFunc() {
-	fmt.Fprintln(os.Stderr, "Cyclone's TrustWallet Vault Extractor v0.3.5; 2026-11-03\nhttps://github.com/cyclone-github/trustwallet_pwn")
-	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, "Cyclone's TrustWallet Vault Extractor v0.3.8; 2026-11-14\nhttps://github.com/cyclone-github/trustwallet_pwn")
 }
 func helpFunc() {
 	versionFunc()
+	fmt.Fprintln(os.Stderr)
 	str := `Example Usage:
 ./trustwallet_extractor.bin [-version] [-help] [trustwallet_vault_dir]
 ./trustwallet_extractor.bin egjidjbpglichdcondbcbdnbeeppgdph/
